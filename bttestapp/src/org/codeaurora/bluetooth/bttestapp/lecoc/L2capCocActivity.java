@@ -41,6 +41,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 
 import org.codeaurora.bluetooth.bttestapp.R;
+import org.codeaurora.bluetooth.bttestapp.vendor.BluetoothVendorCommands;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -72,6 +73,9 @@ public class L2capCocActivity extends Activity implements BluetoothL2capService.
     // Service components
     private BluetoothL2capService l2capService;
     private boolean isServiceBound = false;
+
+    // Vendor command helper, used for the HDT+ Settings feature
+    private BluetoothVendorCommands vendorCommands;
     
     // Bluetooth adapter
     private BluetoothAdapter bluetoothAdapter;
@@ -102,6 +106,20 @@ public class L2capCocActivity extends Activity implements BluetoothL2capService.
     // 0=No Preferred, HDT2=0x04(bit2), HDT3=0x08(bit3), HDT4=0x10(bit4),
     // HDT6=0x20(bit5), HDT7.5=0x40(bit6)
     private static final int[] PHY_OPTION_VALUES = {0, 0x04, 0x08, 0x10, 0x20, 0x40};
+
+    // HDT+ Settings UI components
+    private Spinner spinnerHdtBwExt, spinnerHdtIfh, spinnerHdtChs;
+    private Spinner spinnerHdtBlockRepCToP, spinnerHdtBlockRepPToC;
+    private Spinner spinnerHdtMaxBrCToP, spinnerHdtMaxBrPToC;
+    private Spinner spinnerHdtRateCToP4, spinnerHdtRateCToP6, spinnerHdtRateCToP8,
+            spinnerHdtRateCToP12, spinnerHdtRateCToP15;
+    private Spinner spinnerHdtRatePToC4, spinnerHdtRatePToC6, spinnerHdtRatePToC8,
+            spinnerHdtRatePToC12, spinnerHdtRatePToC15;
+    private Button btnSetHdtPlus;
+
+    // Max block repetition count values matching spinner positions
+    private static final int[] HDT_PLUS_BR_COUNT_VALUES =
+            {0, 1, 2, 4, 8, 16, 32, 64, 128, 255};
 
     // UI Handler for thread-safe updates
     private Handler uiHandler;
@@ -168,7 +186,12 @@ public class L2capCocActivity extends Activity implements BluetoothL2capService.
         initializeUI();
         setupDeviceDiscovery();
         loadPairedDevices();
-        
+
+        // Register vendor command callback, required before sending any
+        // vendor-specific HCI command (e.g. Set HDT+ Features Enable)
+        vendorCommands = BluetoothVendorCommands.getInstance(this);
+        vendorCommands.registerBtVendorCb();
+
         // Start and bind to service
         startAndBindService();
     }
@@ -219,6 +242,9 @@ public class L2capCocActivity extends Activity implements BluetoothL2capService.
 
         // Update PHY controls
         updatePhyControls(active);
+
+        // Update HDT+ controls
+        updateHdtPlusControls(active);
 
         appendLog("Connected to L2CAP service");
     }
@@ -308,6 +334,10 @@ public class L2capCocActivity extends Activity implements BluetoothL2capService.
 
         btnSetPhy.setOnClickListener(v -> setLePhy());
 
+        // HDT+ Settings
+        setupHdtPlusSpinners();
+        btnSetHdtPlus.setOnClickListener(v -> setHdtPlusFeatures());
+
         // LE Connection Interval
         spinnerConnInterval = findViewById(R.id.spinnerConnInterval);
         btnSetConnInterval  = findViewById(R.id.btnSetConnInterval);
@@ -329,6 +359,7 @@ public class L2capCocActivity extends Activity implements BluetoothL2capService.
         updateDataControls(false);
         updateConnIntervalControls(false);
         updatePhyControls(false);
+        updateHdtPlusControls(false);
         updateCreditsDisplay(0, 0);
         
         // Initialize status displays
@@ -698,6 +729,7 @@ public class L2capCocActivity extends Activity implements BluetoothL2capService.
             updateDataControls(connected);
             updateConnIntervalControls(connected);
             updatePhyControls(connected);
+            updateHdtPlusControls(connected);
             updateServerButtons(l2capService != null && l2capService.isServerRunning());
             if (connected) {
                 appendLog("Connection established");
@@ -1118,13 +1150,184 @@ public class L2capCocActivity extends Activity implements BluetoothL2capService.
         return String.join("+", parts) + "(0x" + Integer.toHexString(phy) + ")";
     }
 
+    // -------------------------------------------------------------------------
+    // HDT+ Settings methods
+    // -------------------------------------------------------------------------
+
+    /**
+     * Enable or disable the Set HDT+ Features button based on connection state.
+     */
+    private void updateHdtPlusControls(boolean connected) {
+        if (btnSetHdtPlus != null) {
+            btnSetHdtPlus.setEnabled(connected);
+        }
+    }
+
+    /**
+     * Populate all HDT+ Settings spinners with dropdown labels, matching the
+     * "Disabled"/"Enabled" style used for feature-bit toggles, and the numeric
+     * list style used for the block-repetition-count spinners.
+     */
+    private void setupHdtPlusSpinners() {
+        spinnerHdtBwExt = findViewById(R.id.spinnerHdtBwExt);
+        spinnerHdtIfh = findViewById(R.id.spinnerHdtIfh);
+        spinnerHdtChs = findViewById(R.id.spinnerHdtChs);
+        spinnerHdtBlockRepCToP = findViewById(R.id.spinnerHdtBlockRepCToP);
+        spinnerHdtBlockRepPToC = findViewById(R.id.spinnerHdtBlockRepPToC);
+        spinnerHdtMaxBrCToP = findViewById(R.id.spinnerHdtMaxBrCToP);
+        spinnerHdtMaxBrPToC = findViewById(R.id.spinnerHdtMaxBrPToC);
+        spinnerHdtRateCToP4 = findViewById(R.id.spinnerHdtRateCToP4);
+        spinnerHdtRateCToP6 = findViewById(R.id.spinnerHdtRateCToP6);
+        spinnerHdtRateCToP8 = findViewById(R.id.spinnerHdtRateCToP8);
+        spinnerHdtRateCToP12 = findViewById(R.id.spinnerHdtRateCToP12);
+        spinnerHdtRateCToP15 = findViewById(R.id.spinnerHdtRateCToP15);
+        spinnerHdtRatePToC4 = findViewById(R.id.spinnerHdtRatePToC4);
+        spinnerHdtRatePToC6 = findViewById(R.id.spinnerHdtRatePToC6);
+        spinnerHdtRatePToC8 = findViewById(R.id.spinnerHdtRatePToC8);
+        spinnerHdtRatePToC12 = findViewById(R.id.spinnerHdtRatePToC12);
+        spinnerHdtRatePToC15 = findViewById(R.id.spinnerHdtRatePToC15);
+        btnSetHdtPlus = findViewById(R.id.btnSetHdtPlus);
+
+        String[] toggleLabels = {"Disabled", "Enabled"};
+        Spinner[] toggleSpinners = {
+            spinnerHdtBwExt, spinnerHdtIfh, spinnerHdtChs,
+            spinnerHdtBlockRepCToP, spinnerHdtBlockRepPToC,
+            spinnerHdtRateCToP4, spinnerHdtRateCToP6, spinnerHdtRateCToP8,
+            spinnerHdtRateCToP12, spinnerHdtRateCToP15,
+            spinnerHdtRatePToC4, spinnerHdtRatePToC6, spinnerHdtRatePToC8,
+            spinnerHdtRatePToC12, spinnerHdtRatePToC15
+        };
+        for (Spinner spinner : toggleSpinners) {
+            ArrayAdapter<String> adapter = new ArrayAdapter<>(
+                    this, android.R.layout.simple_spinner_item, toggleLabels);
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            spinner.setAdapter(adapter);
+        }
+
+        String[] brCountLabels = new String[HDT_PLUS_BR_COUNT_VALUES.length];
+        for (int i = 0; i < HDT_PLUS_BR_COUNT_VALUES.length; i++) {
+            brCountLabels[i] = String.valueOf(HDT_PLUS_BR_COUNT_VALUES[i]);
+        }
+        Spinner[] brCountSpinners = {spinnerHdtMaxBrCToP, spinnerHdtMaxBrPToC};
+        for (Spinner spinner : brCountSpinners) {
+            ArrayAdapter<String> adapter = new ArrayAdapter<>(
+                    this, android.R.layout.simple_spinner_item, brCountLabels);
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+            spinner.setAdapter(adapter);
+        }
+    }
+
+    /**
+     * Send the HCI VS Set HDT+ Features Enable command using the values selected
+     * in the HDT+ Settings spinners.
+     *
+     * The Connection_Handle parameter is resolved automatically via
+     * BluetoothDevice.getConnectionHandle() (hidden SystemApi, called via
+     * reflection) on the device backing the active L2CAP CoC connection — the
+     * user never enters it manually.
+     */
+    private void setHdtPlusFeatures() {
+        if (phyGatt == null || l2capService == null) {
+            appendLog("HDT+: GATT not ready – ensure LE connection is established first");
+            return;
+        }
+
+        BluetoothDevice device = l2capService.getConnectedDevice();
+        if (device == null) {
+            appendLog("HDT+: no connected device");
+            return;
+        }
+
+        BluetoothVendorCommands vendorCommands = this.vendorCommands;
+        if (vendorCommands == null) {
+            appendLog("HDT+: vendor command helper not ready");
+            return;
+        }
+        int connectionHandle = vendorCommands.getConnectionHandle(device, BluetoothDevice.TRANSPORT_LE);
+        if (connectionHandle < 0) {
+            appendLog("HDT+: failed to resolve connection handle");
+            return;
+        }
+
+        long hdtPlusFeatures = 0;
+        if (spinnerHdtBwExt.getSelectedItemPosition() == 1) {
+            hdtPlusFeatures |= BluetoothVendorCommands.HDT_PLUS_FEATURE_BW_EXTENSION;
+        }
+        if (spinnerHdtIfh.getSelectedItemPosition() == 1) {
+            hdtPlusFeatures |= BluetoothVendorCommands.HDT_PLUS_FEATURE_IFH;
+        }
+        if (spinnerHdtChs.getSelectedItemPosition() == 1) {
+            hdtPlusFeatures |= BluetoothVendorCommands.HDT_PLUS_FEATURE_CHS;
+        }
+        if (spinnerHdtBlockRepCToP.getSelectedItemPosition() == 1) {
+            hdtPlusFeatures |= BluetoothVendorCommands.HDT_PLUS_FEATURE_BLOCK_REP_C_TO_P;
+        }
+        if (spinnerHdtBlockRepPToC.getSelectedItemPosition() == 1) {
+            hdtPlusFeatures |= BluetoothVendorCommands.HDT_PLUS_FEATURE_BLOCK_REP_P_TO_C;
+        }
+
+        int brCToP = HDT_PLUS_BR_COUNT_VALUES[spinnerHdtMaxBrCToP.getSelectedItemPosition()];
+        int brPToC = HDT_PLUS_BR_COUNT_VALUES[spinnerHdtMaxBrPToC.getSelectedItemPosition()];
+
+        int ratesCToP = 0;
+        if (spinnerHdtRateCToP4.getSelectedItemPosition() == 1) {
+            ratesCToP |= BluetoothVendorCommands.HDT_PLUS_RATE_4;
+        }
+        if (spinnerHdtRateCToP6.getSelectedItemPosition() == 1) {
+            ratesCToP |= BluetoothVendorCommands.HDT_PLUS_RATE_6;
+        }
+        if (spinnerHdtRateCToP8.getSelectedItemPosition() == 1) {
+            ratesCToP |= BluetoothVendorCommands.HDT_PLUS_RATE_8;
+        }
+        if (spinnerHdtRateCToP12.getSelectedItemPosition() == 1) {
+            ratesCToP |= BluetoothVendorCommands.HDT_PLUS_RATE_12;
+        }
+        if (spinnerHdtRateCToP15.getSelectedItemPosition() == 1) {
+            ratesCToP |= BluetoothVendorCommands.HDT_PLUS_RATE_15;
+        }
+
+        int ratesPToC = 0;
+        if (spinnerHdtRatePToC4.getSelectedItemPosition() == 1) {
+            ratesPToC |= BluetoothVendorCommands.HDT_PLUS_RATE_4;
+        }
+        if (spinnerHdtRatePToC6.getSelectedItemPosition() == 1) {
+            ratesPToC |= BluetoothVendorCommands.HDT_PLUS_RATE_6;
+        }
+        if (spinnerHdtRatePToC8.getSelectedItemPosition() == 1) {
+            ratesPToC |= BluetoothVendorCommands.HDT_PLUS_RATE_8;
+        }
+        if (spinnerHdtRatePToC12.getSelectedItemPosition() == 1) {
+            ratesPToC |= BluetoothVendorCommands.HDT_PLUS_RATE_12;
+        }
+        if (spinnerHdtRatePToC15.getSelectedItemPosition() == 1) {
+            ratesPToC |= BluetoothVendorCommands.HDT_PLUS_RATE_15;
+        }
+
+        appendLog("HDT+: Set Features Enable"
+                + "  Handle=0x" + Integer.toHexString(connectionHandle)
+                + "  Features=0x" + Long.toHexString(hdtPlusFeatures)
+                + "  BR_C_To_P=" + brCToP
+                + "  BR_P_To_C=" + brPToC
+                + "  Rates_C_To_P=0x" + Integer.toHexString(ratesCToP)
+                + "  Rates_P_To_C=0x" + Integer.toHexString(ratesPToC));
+
+        boolean result = vendorCommands.sendSetHdtPlusFeaturesEnable(
+                connectionHandle, hdtPlusFeatures, brCToP, brPToC, ratesCToP, ratesPToC);
+        appendLog("HDT+: Set Features Enable " + (result ? "sent" : "FAILED"));
+    }
+
     @Override
     protected void onDestroy() {
         super.onDestroy();
 
         // Close PHY GATT helper
         closePhyGatt();
-        
+
+        // Unregister vendor command callback
+        if (vendorCommands != null) {
+            vendorCommands.unRegisterBtVendorCb();
+        }
+
         // Unregister from service callbacks
         if (l2capService != null) {
             l2capService.unregisterCallback(this);

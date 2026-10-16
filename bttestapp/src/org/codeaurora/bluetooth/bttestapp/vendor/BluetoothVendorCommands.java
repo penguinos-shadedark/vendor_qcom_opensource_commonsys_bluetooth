@@ -66,6 +66,24 @@ public class BluetoothVendorCommands {
     public static final int AUTO_ACCEPT_ON_ROLE_SWITCH_ENABLED = 0x03;
     public static final int AUTO_ACCEPT_REJECT_CONNECTION = 0xFF;
 
+    // HCI VS Set HDT+ Features Enable command
+    public static final int HDT_PLUS_FEATURES_ENABLE_OCF = 0x27A;
+    public static final int HDT_PLUS_FEATURES_ENABLE_FUNCTION_CODE = 0x20;
+
+    // HDT_Plus_Features bitmask values
+    public static final int HDT_PLUS_FEATURE_BW_EXTENSION = 0x01;
+    public static final int HDT_PLUS_FEATURE_IFH = 0x02;
+    public static final int HDT_PLUS_FEATURE_CHS = 0x04;
+    public static final int HDT_PLUS_FEATURE_BLOCK_REP_C_TO_P = 0x08;
+    public static final int HDT_PLUS_FEATURE_BLOCK_REP_P_TO_C = 0x10;
+
+    // Rates_C_To_P / Rates_P_To_C bitmask values (shared for both directions)
+    public static final int HDT_PLUS_RATE_4 = 0x01;
+    public static final int HDT_PLUS_RATE_6 = 0x02;
+    public static final int HDT_PLUS_RATE_8 = 0x04;
+    public static final int HDT_PLUS_RATE_12 = 0x08;
+    public static final int HDT_PLUS_RATE_15 = 0x10;
+
   private final class BtVendorCb implements BluetoothAdapter.BluetoothHciVendorSpecificCallback {
 
     @Override
@@ -149,7 +167,7 @@ public class BluetoothVendorCommands {
         return true;
     }
 
-  boolean registerBtVendorCb() {
+  public boolean registerBtVendorCb() {
     byte[] eventcodes = new byte[0];
     Log.i(TAG, "registerBtVendorCb");
     if (mBtAdapter == null) {
@@ -170,7 +188,7 @@ public class BluetoothVendorCommands {
     return true;
   }
 
-  boolean unRegisterBtVendorCb() {
+  public boolean unRegisterBtVendorCb() {
     Log.i(TAG, "unRegisterBtVendorCb");
     if (mBtAdapter == null) {
         Log.w(TAG, "BluetoothAdapter is NOT available.");
@@ -479,6 +497,100 @@ public class BluetoothVendorCommands {
         } catch (NumberFormatException e) {
             Log.e(TAG, "Invalid Class of Device format: " + codStr, e);
             return null;
+        }
+    }
+
+    /**
+     * Send HCI VS Set HDT+ Features Enable command to enable/disable HDT+
+     * features on a given ACL or CIS connection.
+     * @param connectionHandle Connection Handle (0x0000 - 0x0EFF)
+     * @param hdtPlusFeatures HDT_Plus_Features bitmask (see HDT_PLUS_FEATURE_* constants)
+     * @param brCToP Max block repetitions Central to Peripheral (0x00 - 0xFF)
+     * @param brPToC Max block repetitions Peripheral to Central (0x00 - 0xFF)
+     * @param ratesCToP Rates_C_To_P bitmask (see HDT_PLUS_RATE_* constants)
+     * @param ratesPToC Rates_P_To_C bitmask (see HDT_PLUS_RATE_* constants)
+     * @return true if command was sent successfully
+     */
+    public boolean sendSetHdtPlusFeaturesEnable(int connectionHandle, long hdtPlusFeatures,
+            int brCToP, int brPToC, int ratesCToP, int ratesPToC) {
+        if (connectionHandle < 0x0000 || connectionHandle > 0x0EFF) {
+            Log.e(TAG, "Invalid Connection_Handle: 0x" + Integer.toHexString(connectionHandle));
+            return false;
+        }
+        if (brCToP < 0x00 || brCToP > 0xFF || brPToC < 0x00 || brPToC > 0xFF) {
+            Log.e(TAG, "Invalid BR_C_To_P/BR_P_To_C: " + brCToP + "/" + brPToC);
+            return false;
+        }
+        if (ratesCToP < 0 || ratesCToP > 0xFFFF || ratesPToC < 0 || ratesPToC > 0xFFFF) {
+            Log.e(TAG, "Invalid Rates_C_To_P/Rates_P_To_C: " + ratesCToP + "/" + ratesPToC);
+            return false;
+        }
+
+        if (DBG) {
+            Log.d(TAG, "Sending Set HDT+ Features Enable - Handle: 0x" +
+                    Integer.toHexString(connectionHandle) +
+                    ", Features: 0x" + Long.toHexString(hdtPlusFeatures) +
+                    ", BR_C_To_P: 0x" + Integer.toHexString(brCToP) +
+                    ", BR_P_To_C: 0x" + Integer.toHexString(brPToC) +
+                    ", Rates_C_To_P: 0x" + Integer.toHexString(ratesCToP) +
+                    ", Rates_P_To_C: 0x" + Integer.toHexString(ratesPToC));
+        }
+
+        byte[] parameters = new byte[17];
+        int paramIndex = 0;
+
+        // Function_Code (1 octet) - identifies this as the Set HDT+ Features
+        // Enable sub-command within the shared vendor opcode
+        parameters[paramIndex++] = (byte) HDT_PLUS_FEATURES_ENABLE_FUNCTION_CODE;
+
+        // Connection_Handle (2 octets, little endian)
+        parameters[paramIndex++] = (byte) (connectionHandle & 0xFF);
+        parameters[paramIndex++] = (byte) ((connectionHandle >> 8) & 0xFF);
+
+        // HDT_Plus_Features (8 octets, little endian)
+        for (int i = 0; i < 8; i++) {
+            parameters[paramIndex++] = (byte) ((hdtPlusFeatures >> (8 * i)) & 0xFF);
+        }
+
+        // BR_C_To_P / BR_P_To_C (1 octet each)
+        parameters[paramIndex++] = (byte) (brCToP & 0xFF);
+        parameters[paramIndex++] = (byte) (brPToC & 0xFF);
+
+        // Rates_C_To_P (2 octets, little endian)
+        parameters[paramIndex++] = (byte) (ratesCToP & 0xFF);
+        parameters[paramIndex++] = (byte) ((ratesCToP >> 8) & 0xFF);
+
+        // Rates_P_To_C (2 octets, little endian)
+        parameters[paramIndex++] = (byte) (ratesPToC & 0xFF);
+        parameters[paramIndex++] = (byte) ((ratesPToC >> 8) & 0xFF);
+
+        return sendVendorCommand(HDT_PLUS_FEATURES_ENABLE_OCF, parameters);
+    }
+
+    /**
+     * Retrieve the ACL/CIS connection handle for a connected BluetoothDevice using
+     * the hidden BluetoothDevice.getConnectionHandle(int) SystemApi via reflection.
+     * @param device Connected BluetoothDevice
+     * @param transport Transport type (e.g. BluetoothDevice.TRANSPORT_LE)
+     * @return Connection handle, or -1 if it could not be retrieved
+     */
+    public int getConnectionHandle(BluetoothDevice device, int transport) {
+        if (device == null) {
+            Log.e(TAG, "getConnectionHandle: device is null");
+            return -1;
+        }
+        try {
+            Method method = BluetoothDevice.class.getMethod("getConnectionHandle", int.class);
+            Object result = method.invoke(device, transport);
+            if (result instanceof Integer) {
+                int handle = (Integer) result;
+                if (DBG) Log.d(TAG, "getConnectionHandle: 0x" + Integer.toHexString(handle));
+                return handle;
+            }
+            return -1;
+        } catch (ReflectiveOperationException | SecurityException e) {
+            Log.e(TAG, "getConnectionHandle failed: " + e.getMessage(), e);
+            return -1;
         }
     }
 
